@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Net;
-using System.Collections.Specialized;
+using System.Net.Http;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -16,14 +16,18 @@ namespace LiveSplit.UI.Components
         private LiveSplitState State { get; set; }
         private CollectorSettings Settings { get; set; }
 
-        private WebClient wb;
+        private readonly HttpClient wb;
+
+        public int Resets { get; set; }
 
         public CollectorComponent(LiveSplitState state)
         {
             State = state;
             Settings = new CollectorSettings();
 
-            wb = new WebClient();
+            wb = new HttpClient();
+
+            Resets = 0;
 
             State.OnStart += SplitToSheet;
             State.OnSplit += SplitToSheet;
@@ -31,7 +35,7 @@ namespace LiveSplit.UI.Components
             State.OnUndoSplit += UndoSheet;
             State.OnReset += EndSheet;
         }
-        public void SplitToSheet(object sender, EventArgs e)
+        public async void SplitToSheet(object sender, EventArgs e)
         {
             // Get as early as possible.
             TimeSpan? CurrentTime = State.CurrentTime[State.CurrentTimingMethod];
@@ -39,17 +43,20 @@ namespace LiveSplit.UI.Components
             // Old version saved text in the component, this is completely worthless and a waste of memory. Let the server handle it.
             string SavedText;
 
-            SavedText = GetAttemptValues() + "," // Finished runs , Total attempt count.
+            SavedText = Resets.ToString() + "," // Session Runs
                 + State.CurrentSplit.Name + "," // Name.
-                + CurrentTime.Value.ToString(@"hh\:mm\:ss\.fff") + "," // Current time.
-                + CurrentTime.Value.ToString(@"hh\:mm\:ss") + "," // Current time again.
-                + GetAllDeltas() // Get all Deltas.
+                + State.Run.Last().PersonalBestSplitTime.RealTime.Value.ToString(@"hh\:mm\:ss\.f") + "," // PB
+                + CurrentTime.Value.ToString(@"hh\:mm\:ss\.f") + "," // Current time.
+                + GetDelta("Personal Best") + "," // Get PB Delta.
                 + GetPrediction() + "," // BPT.
+                + SumOfBest.CalculateSumOfBest(State.Run).Value.ToString(@"hh\:mm\:ss\.f"); // Sum Of Best.
+            /*
                 + GetSegmentTime() + "," // Segment Time.
                 + GetAllDeltas(true); // Get all segment deltas.
             SavedText = SavedText.Substring(0, SavedText.Length - 1);
+            */
 
-            Task.Run(() => POST_DATA("split", SavedText));
+            await PostDataAsync("split", SavedText);
 
             string GetAttemptValues()
             {
@@ -61,7 +68,7 @@ namespace LiveSplit.UI.Components
             string GetSegmentTime()
             {
                 if (State.CurrentSplitIndex != 0)
-                    return LiveSplitStateHelper.GetPreviousSegmentTime(State, State.CurrentSplitIndex - 1, State.CurrentTimingMethod).Value.ToString(@"hh\:mm\:ss\.ff");
+                    return LiveSplitStateHelper.GetPreviousSegmentTime(State, State.CurrentSplitIndex - 1, State.CurrentTimingMethod).Value.ToString(@"hh\:mm\:ss\.f");
                 else
                     return "";
             }
@@ -70,7 +77,7 @@ namespace LiveSplit.UI.Components
             {
                 if (State.CurrentPhase == TimerPhase.Ended)
                 {
-                    return State.Run.Last().SplitTime[State.CurrentTimingMethod].Value.ToString(@"hh\:mm\:ss\.ff");
+                    return State.Run.Last().SplitTime[State.CurrentTimingMethod].Value.ToString(@"hh\:mm\:ss\.f");
                 }
 
                 // Directly copied from LiveSplit.RunPrediction :D
@@ -78,7 +85,7 @@ namespace LiveSplit.UI.Components
                 var liveDelta = State.CurrentTime[State.CurrentTimingMethod] - State.CurrentSplit.Comparisons[comparison][State.CurrentTimingMethod];
                 if (liveDelta > delta)
                     delta = liveDelta;
-                return (delta + State.Run.Last().Comparisons[comparison][State.CurrentTimingMethod]).Value.ToString(@"hh\:mm\:ss\.ff");
+                return (delta + State.Run.Last().Comparisons[comparison][State.CurrentTimingMethod]).Value.ToString(@"hh\:mm\:ss\.f");
             }
 
             string GetAllDeltas(bool segmentDelta = false)
@@ -115,9 +122,9 @@ namespace LiveSplit.UI.Components
                         if (State.CurrentSplitIndex <= 0)
                             timestring = "";
                         else if (delta.Value.Minutes == 0)
-                            timestring = PlusMinus + delta.Value.ToString(@"ss\.ff");
+                            timestring = PlusMinus + delta.Value.ToString(@"ss\.f");
                         else
-                            timestring = PlusMinus + delta.Value.ToString(@"mm\:ss\.ff");
+                            timestring = PlusMinus + delta.Value.ToString(@"mm\:ss\.f");
 
                         return timestring;
                     }
@@ -129,30 +136,35 @@ namespace LiveSplit.UI.Components
             }
         }
 
-        public void SkipSheet(object sender, EventArgs e)
+        public async void SkipSheet(object sender, EventArgs e)
         {
-            Task.Run(() => POST_DATA("skip", State.CurrentSplit.Name));
+            await PostDataAsync("skip", State.CurrentSplit.Name);
+        }
+         
+        public async void EndSheet(object sender, TimerPhase value)
+        {
+            Resets++;
+            await PostDataAsync("end", "");
         }
 
-        public void EndSheet(object sender, TimerPhase value)
+        public async void UndoSheet(object sender, EventArgs e)
         {
-            Task.Run(() => POST_DATA("end", ""));
+            await PostDataAsync("undo", "");
         }
 
-        public void UndoSheet(object sender, EventArgs e)
+        public async Task PostDataAsync(string action, string text)
         {
-            Task.Run(() => POST_DATA("undo", ""));
-        }
+            try
+            {
+                var content = new FormUrlEncodedContent(new Dictionary<string, string>()
+                {
+                    ["action"] = action,
+                    ["identifier"] = Settings.Path,
+                    ["data"] = text
+                });
 
-        private void POST_DATA(string action, string text)
-        {
-            string output_info = Settings.Path;
-            var data = new NameValueCollection();
-            data["action"] = action;
-            data["identifier"] = output_info;
-            data["data"] = text;
-
-            var response = wb.UploadValues(Settings.URL, "POST", data);
+                var response = await wb.PostAsync(Settings.URL, content);
+            } catch {  }
         }
 
         public override void Dispose()

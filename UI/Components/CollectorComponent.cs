@@ -1,11 +1,12 @@
-﻿using System;
-using System.Net.Http;
+﻿using LiveSplit.Model;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
-using LiveSplit.Model;
 
 namespace LiveSplit.UI.Components
 {
@@ -29,34 +30,39 @@ namespace LiveSplit.UI.Components
 
             Resets = 0;
 
-            State.OnStart += SplitToSheet;
+            State.OnStart += StartToSheet;
             State.OnSplit += SplitToSheet;
             State.OnSkipSplit += SkipSheet;
             State.OnUndoSplit += UndoSheet;
             State.OnReset += EndSheet;
         }
-        public async void SplitToSheet(object sender, EventArgs e)
+
+        public async Task UpdateData(bool isStart = false)
         {
             // Get as early as possible.
             TimeSpan? CurrentTime = State.CurrentTime[State.CurrentTimingMethod];
 
-            // Old version saved text in the component, this is completely worthless and a waste of memory. Let the server handle it.
-            string SavedText;
+            StringBuilder builder = new StringBuilder();
 
-            SavedText = Resets.ToString() + "," // Session Runs
-                + State.CurrentSplit.Name + "," // Name.
-                + State.Run.Last().PersonalBestSplitTime.RealTime.Value.ToString(@"hh\:mm\:ss\.f") + "," // PB
-                + CurrentTime.Value.ToString(@"hh\:mm\:ss\.f") + "," // Current time.
-                + GetDelta("Personal Best") + "," // Get PB Delta.
-                + GetPrediction() + "," // BPT.
-                + SumOfBest.CalculateSumOfBest(State.Run).Value.ToString(@"hh\:mm\:ss\.f"); // Sum Of Best.
+            builder.Append(Resets.ToString() + ",")
+                .Append(State.CurrentSplit.Name + ",")
+                .Append(State.Run.Last().PersonalBestSplitTime.RealTime.Value.ToString(@"hh\:mm\:ss\.f") + ",");
+
+            if (!isStart)
+                builder.Append(CurrentTime.Value.ToString(@"hh\:mm\:ss\.f") + ",");
+            else
+                builder.Append(",");
+
+            builder.Append(GetDelta("Personal Best") + ",")
+                .Append(GetPrediction() + ",")
+                .Append(SumOfBest.CalculateSumOfBest(State.Run).Value.ToString(@"hh\:mm\:ss\.f"));
             /*
                 + GetSegmentTime() + "," // Segment Time.
                 + GetAllDeltas(true); // Get all segment deltas.
             SavedText = SavedText.Substring(0, SavedText.Length - 1);
             */
 
-            await PostDataAsync("split", SavedText);
+            await PostDataAsync("split", builder.ToString());
 
             string GetAttemptValues()
             {
@@ -134,6 +140,16 @@ namespace LiveSplit.UI.Components
                 else
                     return "";
             }
+        }
+
+
+        public async void SplitToSheet(object sender, EventArgs e)
+        {
+            await UpdateData();
+        }
+        public async void StartToSheet(object sender, EventArgs e)
+        {
+            await UpdateData(true);
         }
 
         public async void SkipSheet(object sender, EventArgs e)
